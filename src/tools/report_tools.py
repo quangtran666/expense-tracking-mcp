@@ -1,5 +1,3 @@
-"""Reporting tools."""
-
 from __future__ import annotations
 
 from fastmcp import FastMCP
@@ -31,78 +29,60 @@ def setup_report_tools(
 
         rows = resp.get("values", [])
 
-        # Skip header row if present
         if rows and rows[0] == COLUMNS:
             rows = rows[1:]
 
         if not rows:
             return f"Không có khoản chi nào trong tháng {month:02d}/{year}."
 
-        total = 0.0
-        category_sums: dict[str, float] = {}
-        entries: list[tuple[str, float, str]] = []
+        entries = []
+        category_sums = {}
 
         for row in rows:
-            # Ensure row has 5 columns
-            row_extended = list(row) + [""] * (5 - len(row))
-            _, item, amount_str, category, _ = row_extended[:5]
-
-            if not amount_str:
-                continue
+            row_data = (list(row) + [""] * 5)[:5]
+            _, item, amount_str, category, _ = row_data
 
             try:
-                amt = float(amount_str)
-            except Exception:
+                amt = float(amount_str) if amount_str else 0
+                if amt <= 0:
+                    continue
+
+                cat = (category or "").strip() or "Không phân loại"
+                entries.append((item, amt, cat))
+                category_sums[cat] = category_sums.get(cat, 0) + amt
+            except (ValueError, TypeError):
                 continue
 
-            total += amt
-            cat = (category or "").strip() or "Không phân loại"
-            category_sums[cat] = category_sums.get(cat, 0) + amt
-            entries.append((item, amt, cat))
+        if not entries:
+            return f"Không có khoản chi nào trong tháng {month:02d}/{year}."
 
-        # Total expenses
-        total_str = format_vnd(total)
-        total_line = f"Tổng chi: {total_str} VND"
-
-        # Expenses by category
+        # Tạo report
+        total = sum(amt for _, amt, _ in entries)
+        sorted_entries = sorted(entries, key=lambda x: x[1], reverse=True)[:3]
         sorted_cats = sorted(category_sums.items(), key=lambda x: x[1], reverse=True)
-        category_lines: list[str] = [
-            f"- {cat}: {format_vnd(sum_amt)} VND" for cat, sum_amt in sorted_cats
+
+        # Format output
+        def format_entry(item, amt, cat, index=None):
+            amt_str = format_vnd(amt)
+            cat_part = f" ({cat})" if cat != "Không phân loại" else ""
+            prefix = f"{index}. " if index else "Khoản chi lớn nhất: "
+            return f"{prefix}{item}{cat_part} - {amt_str} VND"
+
+        report_parts = [
+            f"Báo cáo chi tiêu tháng {month:02d}/{year}:",
+            f"Tổng chi: {format_vnd(total)} VND",
+            "Chi theo nhóm:",
+            *[f"- {cat}: {format_vnd(amt)} VND" for cat, amt in sorted_cats],
+            "",
+            "Những khoản chi lớn nhất:" if len(sorted_entries) > 1 else "",
+            *(
+                [format_entry(*sorted_entries[0])]
+                if len(sorted_entries) == 1
+                else [
+                    format_entry(item, amt, cat, i + 1)
+                    for i, (item, amt, cat) in enumerate(sorted_entries)
+                ]
+            ),
         ]
 
-        # Largest expenses (max 3)
-        entries.sort(key=lambda x: x[1], reverse=True)
-        largest_entries = entries[:3]
-        largest_section_lines: list[str] = []
-
-        if not largest_entries:
-            largest_section_lines.append("Không có khoản chi nào.")
-        elif len(largest_entries) == 1:
-            item, amt, cat = largest_entries[0]
-            amt_str = format_vnd(amt)
-            if cat == "Không phân loại":
-                largest_section_lines.append(
-                    f"Khoản chi lớn nhất: {item} - {amt_str} VND"
-                )
-            else:
-                largest_section_lines.append(
-                    f"Khoản chi lớn nhất: {item} ({cat}) - {amt_str} VND"
-                )
-        else:
-            largest_section_lines.append("Những khoản chi lớn nhất:")
-            for i, (item, amt, cat) in enumerate(largest_entries, start=1):
-                amt_str = format_vnd(amt)
-                if cat == "Không phân loại":
-                    largest_section_lines.append(f"{i}. {item} - {amt_str} VND")
-                else:
-                    largest_section_lines.append(f"{i}. {item} ({cat}) - {amt_str} VND")
-
-        # Assemble report
-        report_lines: list[str] = [f"Báo cáo chi tiêu tháng {month:02d}/{year}:"]
-        report_lines.append(total_line)
-        report_lines.append("Chi theo nhóm:")
-        report_lines.extend(category_lines)
-        report_lines.append("")  # empty line
-        report_lines.extend(largest_section_lines)
-
-        return "\n".join(report_lines)
+        return "\n".join(filter(None, report_parts))
